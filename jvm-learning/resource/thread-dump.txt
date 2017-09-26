@@ -1,0 +1,10 @@
+1. ps -ef | grep java找到你的java程序的进程id, 定位 pid
+
+2. top -Hp $pidshift+t 查看耗cpu时间最多的几个线程, 记录下线程的id
+
+3. 把上诉线程ID转换成16进制小写  比如  : 0x12ef
+
+4. kill -3 $pid  触发tomcat的thread dump
+
+5. 找到tomcat的catalin.out 日志, 把 上面几个线程对应的代码段拿出来.
+

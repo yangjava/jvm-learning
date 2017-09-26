@@ -1,0 +1,87 @@
+前言
+Java Thread Dump 是一个非常有用的应用诊断工具, 通过thread dump出来的信息, 可以定位到你需要了解的线程, 以及这个线程的调用栈. 如果配合linux的top命令, 可以找到你的系统中的最耗CPU的线程代码段, 这样才能有针对性地进行优化.
+
+场景和实践
+    2.1. 后台系统一直是在黑盒运行, 除了能暂停一部分任务的执行, 根本无法知道哪些任务耗CPU过多。所以一直以为是业务代码的问题, 经过各种优化(删减没必要的逻辑, 合并写操作)等等优化, 系统负载还是很高. 没什么访问量, 后台任务处理也就是每天几百万的级别, load还是达到了15以上. CPU只有4核，天天收到load告警却无从下手, 于是乎就被迫来分析一把线程.
+
+   2.2 系统跑的是java tomcat, 要触发tomcat thread dump很简单, 先找到tomcat对应的进程id, 我们设置为PID
+   【linux 命令】：  ps -ef | grep tomcat
+   可以找到, 然后给这个进程发送一个QUIT的信号量, 让其触发线程的dump,  下面的操作先别急着动手, 等到看完2.3再动手不迟
+    【linux 命令】： kill -3 $PID   /  kill -QUIT $PID
+tomcat会把thread dump的内容输出到控制台
+     【linux 命令】：cd $tomcathome/logs/
+查看 catalina.out 文件, 把最后的跟thread相关的内容获取出来.
+大致内容如下:
+2012-04-13 16:30:41
+Full thread dump OpenJDK 64-Bit Server VM (1.6.0-b09 mixed mode):
+"TP-Processor12" daemon prio=10 tid=0x00000000045acc00 nid=0x7f19 in Object.wait() [0x00000000483d0000..0x00000000483d0a90]
+java.lang.Thread.State: WAITING (on object monitor)
+at java.lang.Object.wait(Native Method)
+- waiting on <0x00002aaab5bfce70> (a org.apache.tomcat.util.threads.ThreadPool$ControlRunnable)
+at java.lang.Object.wait(Object.java:502)
+at org.apache.tomcat.util.threads.ThreadPool$ControlRunnable.run(ThreadPool.java:662)
+- locked <0x00002aaab5bfce70> (a org.apache.tomcat.util.threads.ThreadPool$ControlRunnable)
+at java.lang.Thread.run(Thread.java:636)
+ 
+"TP-Processor11" daemon prio=10 tid=0x00000000048e3c00 nid=0x7f18 in Object.wait() [0x00000000482cf000..0x00000000482cfd10]
+java.lang.Thread.State: WAITING (on object monitor)
+....
+"VM Thread" prio=10 tid=0x00000000042ff400 nid=0x77de runnable"GC task thread#0 (ParallelGC)" prio=10 tid=0x000000000429c400 nid=0x77d9 runnable
+ 
+"GC task thread#1 (ParallelGC)" prio=10 tid=0x000000000429d800 nid=0x77da runnable
+ 
+"GC task thread#2 (ParallelGC)" prio=10 tid=0x000000000429ec00 nid=0x77db runnable
+ 
+"GC task thread#3 (ParallelGC)" prio=10 tid=0x00000000042a0000 nid=0x77dc runnable
+ 
+"VM Periodic Task Thread" prio=10 tid=0x0000000004348400 nid=0x77e5 waiting on condition
+ 
+JNI global references: 815
+ 
+Heap
+PSYoungGen      total 320192K, used 178216K [0x00002aaadce00000, 0x00002aaaf1800000, 0x00002aaaf1800000)
+eden space 303744K, 55% used [0x00002aaadce00000,0x00002aaae718e048,0x00002aaaef6a0000)
+from space 16448K, 65% used [0x00002aaaf0690000,0x00002aaaf110c1b0,0x00002aaaf16a0000)
+to   space 16320K, 0% used [0x00002aaaef6a0000,0x00002aaaef6a0000,0x00002aaaf0690000)
+PSOldGen        total 460992K, used 425946K [0x00002aaab3a00000, 0x00002aaacfc30000, 0x00002aaadce00000)
+object space 460992K, 92% used [0x00002aaab3a00000,0x00002aaacd9f6a30,0x00002aaacfc30000)
+PSPermGen       total 56192K, used 55353K [0x00002aaaae600000, 0x00002aaab1ce0000, 0x00002aaab3a00000)
+object space 56192K, 98% used [0x00002aaaae600000,0x00002aaab1c0e520,0x00002aaab1ce0000)
+最后一段是系统的对内存的使用情况.
+2.3. 要知道thread dump是不会告诉你每个线程的负载情况的, 需要知道每个线程的负载情况, 还得靠top命令来查看.
+    【linux 命令】：top -H -p $PID
+这时候, 可以看到java进程下各个线程的负载和内存等使用情况. 也不用全部搞下来, 只要top几个负载过高的记录即可（最好按下SHIFT+T 按CPU耗时总时间倒序排序，这样找到的top几个是最耗CPU时间的，而且系统启动时间应该持续15分钟以上，这样容易看出哪个线程耗时多。）
+     大致内容如下:
+
+Tasks: 118 total,   2 running, 116 sleeping,   0 stopped,   0 zombie
+Cpu(s): 92.6%us,  2.3%sy,  0.0%ni,  3.8%id,  0.7%wa,  0.1%hi,  0.7%si,  0.0%st
+Mem:   4054168k total,  3892212k used,   161956k free,   115816k buffers
+Swap:  4192956k total,   294448k used,  3898508k free,  2156024k cachedPID USER      PR  NI  VIRT  RES  SHR S %CPU %MEM    TIME+  COMMAND
+8091 admin     16   0 1522m 814m 9660 R 22.3 20.6   4:05.61 java
+8038 admin     16   0 1522m 814m 9660 R 10.3 20.6   2:46.31 java
+8043 admin     15   0 1522m 814m 9660 S  3.7 20.6   1:52.04 java
+8039 admin     15   0 1522m 814m 9660 S  0.7 20.6   2:10.98 java
+8041 admin     15   0 1522m 814m 9660 S  0.7 20.6   1:39.66 java
+8009 admin     15   0 1522m 814m 9660 S  0.3 20.6   0:27.05 java
+8040 admin     15   0 1522m 814m 9660 S  0.3 20.6   0:51.46 java
+7978 admin     25   0 1522m 814m 9660 S  0.0 20.6   0:00.00 java
+7980 admin     19   0 1522m 814m 9660 S  0.0 20.6   0:05.05 java
+7981 admin     16   0 1522m 814m 9660 S  0.0 20.6   0:06.31 java
+7982 admin     15   0 1522m 814m 9660 S  0.0 20.6   0:06.50 java
+7983 admin     15   0 1522m 814m 9660 S  0.0 20.6   0:06.66 java
+7984 admin     15   0 1522m 814m 9660 S  0.0 20.6   0:06.87 java
+7985 admin     15   0 1522m 814m 9660 S  0.0 20.6   0:33.82 java
+几个字段跟top的字段意思是一致的, 就是这里的 PID是 线程在系统里面的ID, 也就是进程每创建一个线程, 不仅进程自己会分配ID, 系统也会的. 接下来的问题排查就是主要根据这个PID来走的.
+看到上面的部分数据, 当前正在跑的任务中, CPU占用最高的几个线程ID
+2.4. 如果不借助工具, 自己分析的话, 可以把PID字段从10进制数改为 16进制, 然后到threaddump日志中去查找一把, 找对对应的线程上下文信息, 就可以知道哪段代码耗CPU最多了.
+比如 8091  的16进制是 1F9B, 查找 thread dump 日志中, nid=0x1F9B 的线程( 这里的nid意思是nativeid, 也就是上面讲的系统为线程分配的ID), 然后找到相关的代码段, 进行优化即可.
+比如
+"链路检测" prio=10 tid=0x00002aaafa498000 nid=0x1F9B runnable [0x0000000045fac000..0x0000000045facd10]</div>
+ 
+java.lang.Thread.State: RUNNABLE
+at cn.emay.sdk.communication.socket.AsynSocket$CheckConnection.run(AsynSocket.java:112)
+at java.lang.Thread.run(Thread.java:636)
+可以看出, 这是一个 发短信的客户端的链路检测引擎的系统负载飙升. (实际上这个线程引起的负载绝不止这么一点.)
+2.5 第三方的jar包, 我感到顿时泪奔. 接下来是反编译, 看详细的代码… 果然是有一段死循环监听的… 目前是像他们要一份SDK的源代码， 或者要他们进行优化。
+2.6 使用工具的话, 可以看到更多一点的信息, java的tda工具就是专门分析thread dump的.
+具体功能自己去挖掘啦.
