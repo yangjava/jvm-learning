@@ -1,0 +1,73 @@
+问题背景
+  Tomcat经常崩溃crash，想看看JVM内存使用情况，就想到了用Jconsole监控，以前只是监控本地的JVM，这次要监控远程的，遇到了不少问题。
+  经过几个小时的努力，参考了众多网友的资料之后，才最终解决了这个问题。
+  比较坑爹的是，网上的资料，竟然没有一个是：完美无缺的，没有一篇文章提到了“jmxremote.access”这个文件的重要性。
+ 
+第一阶段
+  找到了2种配置，是否需要输入密码。
+   JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.port=60001"
+   JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.authenticate=false"
+   JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.ssl=false"
+   
+   authenticate为false，jconsole连接远程jvm时，就不需要输入用户名和密码。
+   否则，要配置密码文件和密码。
+   可以指定密码文件的位置
+   JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.pwd.file=/root/soft/jdk7/jre/lib/management/jmxremote.password"
+   
+   我把这些配置放在了catalish.sh中。
+   
+第二阶段
+   上面的配置遇到了一个问题，如果是第一次启动正常，但是当shutdown时，提示端口号被占用了。
+   问题原因是，在关闭Tomcat时，也执行了Catalish中的jmxremote的端口号。
+   
+   解决办法：在catalish.sh文件中，判断是否为启动命令，如果是start，就设置变量，否则，就不设置。
+   相关脚本：
+   JAVA_OPTS="$JAVA_OPTS -Xms256m -Xmx1024m -XX:PermSize=128M -XX:MaxPermSize=256m"
+101 if [ "$1" = "start" ];then
+102      echo "set console";
+103 #   JAVA_OPTS="$JAVA_OPTS -Xms256m -Xmx1024m -XX:PermSize=128M -XX:MaxPermSize=256m"
+104     JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=60001 -Djava.rmi.server.hostname=42.96.84.84";
+105     JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.authenticate=false";
+106     JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.ssl=false";
+107 #   JAVA_OPTS="$JAVA_OPTS -Dcom.sun.management.jmxremote.pwd.file=/root/soft/jdk7/jre/lib/management/jmxremote.password"
+108 else
+109   echo "no startup";
+110 fi;
+111
+ 
+第三阶段
+   上面的设置之后，可能还连接不上，需要配置“java.rmi.server.hostname”为机器的ip，比如我的是“42.96.84.84”。
+   
+   然后，重启Tomcat，在本地Jconsole连接远程JVM，只输入“42.96.84.84:60001”。
+ 
+   
+第四阶段
+   登录使用密码，搞了几个小时，尼玛。
+   
+   注意问题
+   1.-Dcom.sun.management.jmxremote.authenticate=true
+   2.-Dcom.sun.management.jmxremote.pwd.file 指定正确的密码文件
+   3.用户名及密码(参考jmxremote.password文件) monitorRole只能读，controlRole能读写 
+     配置中的安全原因出错，由于密码是以明文的方式保存在：jmxremote.password中，所以对此文件只能有所有者都读取，其他人都不能读取。
+ 权限需要注意，600,所有者有rw权限。
+   4.用户和权限其实是存在jmxremote.access中。
+   千万要注意啊，网上的绝大部分资料，都没有提到这个文件的真正作用。
+   我是在尝试了若干小时之后，才发现这个文件的作用，竟然是如此的大。
+   有点类似于SVN配置，用户名-权限，用户名-密码，2个配置文件。
+   fansunion   readonly
+   admin   readwrite \
+                 create javax.management.monitor.*,javax.management.timer.* \
+                 unregister
+ 
+jmxremote.password内容
+fansunion  12345
+admin  12345
+ 
+“http://www.linuxidc.com/Linux/2015-02/113415.htm”这篇文章的最后，
+   "用户名及密码(参考jmxremote.password文件) monitorRole只能读，controlRole能读写"，给我很大的启发。
+   为什么monitorRole和controlRole，这2个角色的权限还不一样呢，默认注释的password文件中，没有看出有啥区别呀。
+   于是，我才去jmxremote.access文件看了看，最终找到了问题的症结。
+   
+   至此，不使用密码和使用用户名及密码，“admin”-“12345”成功登录42.96.84.84上的Tomcat使用的JVM。
+   
+   注意：本文中的ip、用户名、密码，仅供参考，你懂的。

@@ -1,0 +1,317 @@
+今天看代码，里面有一个类java.lang.ref.SoftReference把小弟弄神了，试想一下，接触java已经有3年了哇，连lang包下面的类都不了解，怎么混。后来在网上查资料，感觉收获颇多，现记录如下。
+
+对象的强、软、弱和虚引用
+　　在JDK 1.2以前的版本中，若一个对象不被任何变量引用，那么程序就无法再使用这个对象。也就是说，只有对象处于可触及（reachable）状态，程序才能使用它。从JDK 1.2版本开始，把对象的引用分为4种级别，从而使程序能更加灵活地控制对象的生命周期。这4种级别由高到低依次为：强引用、软引用、弱引用和虚引用。
+
+　　
+
+强引用（StrongReference）
+　　强引用是使用最普遍的引用。如果一个对象具有强引用，那垃圾回收器绝不会回收它。当内存空间不足，Java虚拟机宁愿抛出OutOfMemoryError错误，使程序异常终止，也不会靠随意回收具有强引用的对象来解决内存不足的问题。 
+
+　　 ps：强引用其实也就是我们平时A a = new A()这个意思。
+
+ 
+
+软引用（SoftReference）
+　　软引用（soft reference）在强度上弱于强引用，通过类SoftReference来表示。它的作用是告诉垃圾回收器，程序中的哪些对象是不那么重要，当内存不足的时候是可以被暂时回收的。当JVM中的内存不足的时候，垃圾回收器会释放那些只被软引用所指向的对象。如果全部释放完这些对象之后，内存还不足，才会抛出OutOfMemory错误。软引用非常适合于创建缓存。当系统内存不足的时候，缓存中的内容是可以被释放的。
+
+　　比如考虑一个图像编辑器的程序。该程序会把图像文件的全部内容都读取到内存中，以方便进行处理。而用户也可以同时打开多个文件。当同时打开的文件过多的时候，就可能造成内存不足。如果使用软引用来指向图像文件内容的话，垃圾回收器就可以在必要的时候回收掉这些内存。
+
+复制代码
+public class ImageData {
+    private String path;
+    private SoftReference<byte[]> dataRef;
+    public ImageData(String path) {
+        this.path = path;
+        dataRef = new SoftReference<byte[]>(new byte[0]);
+    }
+    private byte[] readImage() {
+        return new byte[1024 * 1024]; //省略了读取文件的操作
+    }
+    public byte[] getData() {
+        byte[] dataArray = dataRef.get();
+        if (dataArray == null || dataArray.length == 0) {
+            dataArray = readImage();
+            dataRef = new SoftReference<byte[]>(dataArray);
+        }
+        return dataArray;
+    }
+}
+复制代码
+　　在运行上面程序的时候，可以使用 -Xmx 参数来限制JVM可用的内存。由于软引用所指向的对象可能被回收掉，在通过get方法来获取软引用所实际指向的对象的时候，总是要检查该对象是否还存活。
+
+弱引用（WeakReference）　　
+　　在强度上弱于软引用，通过类WeakReference来表示。它的作用是引用一个对象，但是并不阻止该对象被回收。如果使用一个强引用的话，只要该引用存在，那么被引用的对象是不能被回收的。弱引用则没有这个问题。在垃圾回收器运行的时候，如果一个对象的所有引用都是弱引用的话，该对象会被回收。弱引用的作用在于解决强引用所带来的对象之间在存活时间上的耦合关系。弱引用最常见的用处是在集合类中，尤其在哈希表中。哈希表的接口允许使用任何Java对象作为键来使用。当一个键值对被放入到哈希表中之后，哈希表对象本身就有了对这些键和值对象的引用。如果这种引用是强引用的话，那么只要哈希表对象本身还存活，其中所包含的键和值对象是不会被回收的。如果某个存活时间很长的哈希表中包含的键值对很多，最终就有可能消耗掉JVM中全部的内存。
+
+　　对于这种情况的解决办法就是使用弱引用来引用这些对象，这样哈希表中的键和值对象都能被垃圾回收。Java中提供了WeakHashMap来满足这一常见需求。
+
+ 
+
+幽灵引用（PhantomReference）
+
+　　在介绍幽灵引用之前，要先介绍Java提供的对象终止化机制（finalization）。在Object类里面有个finalize方法，其设计的初衷是在一个对象被真正回收之前，可以用来执行一些清理的工作。因为Java并没有提供类似C++的析构函数一样的机制，就通过 finalize方法来实现。但是问题在于垃圾回收器的运行时间是不固定的，所以这些清理工作的实际运行时间也是不能预知的。幽灵引用（phantom reference）可以解决这个问题。在创建幽灵引用PhantomReference的时候必须要指定一个引用队列。当一个对象的finalize方法已经被调用了之后，这个对象的幽灵引用会被加入到队列中。通过检查该队列里面的内容就知道一个对象是不是已经准备要被回收了。
+
+　　幽灵引用及其队列的使用情况并不多见，主要用来实现比较精细的内存使用控制，这对于移动设备来说是很有意义的。程序可以在确定一个对象要被回收之后，再申请内存创建新的对象。通过这种方式可以使得程序所消耗的内存维持在一个相对较低的数量。比如下面的代码给出了一个缓冲区的实现示例。
+
+复制代码
+public class PhantomBuffer {
+  private byte[] data = new byte[0];
+    private ReferenceQueue<byte[]> queue = new ReferenceQueue<byte[]>();
+    private PhantomReference<byte[]> ref = new PhantomReference<byte[]>(data, queue);
+    public byte[] get(int size) {
+        if (size <= 0) {
+            throw new IllegalArgumentException("Wrong buffer size");
+        }
+        if (data.length < size) {
+            data = null;
+            System.gc(); //强制运行垃圾回收器
+             try {
+                queue.remove(); //该方法会阻塞直到队列非空
+                ref.clear(); //幽灵引用不会自动清空，要手动运行
+                ref = null;
+                data = new byte[size];
+                ref = new PhantomReference<byte[]>(data, queue);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+       }
+       return data;
+    }
+}
+复制代码
+　　在上面的代码中，每次申请新的缓冲区的时候，都首先确保之前的缓冲区的字节数组已经被成功回收。引用队列的remove方法会阻塞直到新的幽灵引用被加入到队列中。不过需要注意的是，这种做法会导致垃圾回收器被运行的次数过多，可能会造成程序的吞吐量过低。
+
+ 
+
+ 
+
+引用队列
+
+　　在有些情况下，程序会需要在一个对象的可达到性发生变化的时候得到通知。比如某个对象的强引用都已经不存在了，只剩下软引用或是弱引用。但是还需要对引用本身做一些的处理。典型的情景是在哈希表中。引用对象是作为WeakHashMap中的键对象的，当其引用的实际对象被垃圾回收之后，就需要把该键值对从哈希表中删除。有了引用队列（ReferenceQueue），就可以方便的获取到这些弱引用对象，将它们从表中删除。在软引用和弱引用对象被添加到队列之前，其对实际对象的引用会被自动清空。通过引用队列的poll/remove方法就可以分别以非阻塞和阻塞的方式获取队列中的引用对象
+
+
+
+
+
+
+
+
+
+
+
+
+
+如果一个内存中的对象没有任何引用的话，就说明这个对象已经不再被使用了，从而可以成为被垃圾回收的候选。不过由于垃圾回收器的运行时间不确定，可被垃圾回收的对象的实际被回收时间是不确定的。对于一个对象来说，只要有引用的存在，它就会一直存在于内存中。如果这样的对象越来越多，超出了JVM中的内存总数，JVM就会抛出OutOfMemory错误。虽然垃圾回收的具体运行是由JVM来控制的，但是开发人员仍然可以在一定程度上与垃圾回收器进行交互，其目的在于更好的帮助垃圾回收器管理好应用的内存。这种交互方式就是使用JDK 1.2引入的java.lang.ref包。
+1 强引用
+强引用是使用最普遍的引用。如果一个对象具有强引用，那垃圾回收器绝不会回收它。当内存空间不足，Java虚拟机宁愿抛出OutOfMemoryError错误，使程序异常终止，也不会靠随意回收具有强引用的对象来解决内存不足的问题。
+如Date date = new Date()，date就是一个对象的强引用。对象的强引用可以在程序中到处传递。很多情况下，会同时有多个引用指向同一个对象。强引用的存在限制了对象在内存中的存活时间。假如对象A中包含了一个对象B的强引用，那么一般情况下，对象B的存活时间就不会短于对象A。如果对象A没有显式的把对象B的引用设为null的话，就只有当对象A被垃圾回收之后，对象B才不再有引用指向它，才可能获得被垃圾回收的机会。
+实例代码：
+?
+1
+2
+3
+4
+5
+6
+7
+8
+9
+package com.skywang.java;
+ 
+public class StrongReferenceTest {
+ 
+ public static void main(String[] args) {
+  MyDate date = new MyDate();
+  System.gc();
+ }
+}
+运行结果：
+<无任何输出>
+结果说明：即使显式调用了垃圾回收，但是用于date是强引用，date没有被回收。
+除了强引用之外，java.lang.ref包中提供了对一个对象的不同的引用方式。JVM的垃圾回收器对于不同类型的引用有不同的处理方式。
+2 软引用
+如果一个对象只具有软引用，则内存空间足够，垃圾回收器就不会回收它；如果内存空间不足了，就会回收这些对象的内存。只要垃圾回收器没有回收它，该对象就可以被程序使用。软引用可用来实现内存敏感的高速缓存。
+软引用可以和一个引用队列（ReferenceQueue）联合使用，如果软引用所引用的对象被垃圾回收器回收，Java虚拟机就会把这个软引用加入到与之关联的引用队列中。
+软引用（soft reference）在强度上弱于强引用，通过类SoftReference来表示。它的作用是告诉垃圾回收器，程序中的哪些对象是不那么重要，当内存不足的时候是可以被暂时回收的。当JVM中的内存不足的时候，垃圾回收器会释放那些只被软引用所指向的对象。如果全部释放完这些对象之后，内存还不足，才会抛出OutOfMemory错误。软引用非常适合于创建缓存。当系统内存不足的时候，缓存中的内容是可以被释放的。比如考虑一个图像编辑器的程序。该程序会把图像文件的全部内容都读取到内存中，以方便进行处理。而用户也可以同时打开多个文件。当同时打开的文件过多的时候，就可能造成内存不足。如果使用软引用来指向图像文件内容的话，垃圾回收器就可以在必要的时候回收掉这些内存。     
+实例代码：
+?
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+package com.skywang.java;
+ 
+import java.lang.ref.SoftReference;
+ 
+public class SoftReferenceTest {
+ 
+ public static void main(String[] args) {
+  SoftReference ref = new SoftReference(new MyDate());
+  ReferenceTest.drainMemory();
+ }
+}
+运行结果：
+<无任何输出>
+结果说明：在内存不足时，软引用被终止。软引用被禁止时，
+?
+1
+2
+SoftReference ref = new SoftReference(new MyDate());
+ReferenceTest.drainMemory();
+等价于
+?
+1
+2
+3
+4
+5
+6
+7
+MyDate date = new MyDate();
+ 
+// 由JVM决定运行
+if(JVM.内存不足()) {
+ date = null;
+ System.gc();
+}
+3 弱引用
+弱引用（weak reference）在强度上弱于软引用，通过类WeakReference来表示。它的作用是引用一个对象，但是并不阻止该对象被回收。如果使用一个强引用的话，只要该引用存在，那么被引用的对象是不能被回收的。弱引用则没有这个问题。在垃圾回收器运行的时候，如果一个对象的所有引用都是弱引用的话，该对象会被回收。弱引用的作用在于解决强引用所带来的对象之间在存活时间上的耦合关系。弱引用最常见的用处是在集合类中，尤其在哈希表中。哈希表的接口允许使用任何Java对象作为键来使用。当一个键值对被放入到哈希表中之后，哈希表对象本身就有了对这些键和值对象的引用。如果这种引用是强引用的话，那么只要哈希表对象本身还存活，其中所包含的键和值对象是不会被回收的。如果某个存活时间很长的哈希表中包含的键值对很多，最终就有可能消耗掉JVM中全部的内存。
+对于这种情况的解决办法就是使用弱引用来引用这些对象，这样哈希表中的键和值对象都能被垃圾回收。Java中提供了WeakHashMap来满足这一常见需求。
+示例代码：
+?
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+package com.skywang.java;
+ 
+import java.lang.ref.WeakReference;
+ 
+public class WeakReferenceTest {
+ 
+ public static void main(String[] args) {
+  WeakReference ref = new WeakReference(new MyDate());
+  System.gc(); 
+ }
+}
+运行结果：
+?
+1
+obj [Date: 1372142034360] is gc
+结果说明：在JVM垃圾回收运行时，弱引用被终止.
+?
+1
+2
+WeakReference ref = new WeakReference(new MyDate());
+System.gc();
+等同于：
+?
+1
+2
+3
+4
+5
+6
+7
+MyDate date = new MyDate();
+ 
+// 垃圾回收
+if(JVM.内存不足()) {
+ date = null;
+ System.gc();
+}
+弱引用与软引用的区别在于：只具有弱引用的对象拥有更短暂的生命周期。在垃圾回收器线程扫描它所管辖的内存区域的过程中，一旦发现了只具有弱引用的对象，不管当前内存空间足够与否，都会回收它的内存。不过，由于垃圾回收器是一个优先级很低的线程，因此不一定会很快发现那些只具有弱引用的对象。
+弱引用可以和一个引用队列（ReferenceQueue）联合使用，如果弱引用所引用的对象被垃圾回收，Java虚拟机就会把这个弱引用加入到与之关联的引用队列中。
+4 假象引用
+又叫幽灵引用~在介绍幽灵引用之前，要先介绍Java提供的对象终止化机制（finalization）。在Object类里面有个finalize方法，其设计的初衷是在一个对象被真正回收之前，可以用来执行一些清理的工作。因为Java并没有提供类似C++的析构函数一样的机制，就通过 finalize方法来实现。但是问题在于垃圾回收器的运行时间是不固定的，所以这些清理工作的实际运行时间也是不能预知的。幽灵引用（phantom reference）可以解决这个问题。在创建幽灵引用PhantomReference的时候必须要指定一个引用队列。当一个对象的finalize方法已经被调用了之后，这个对象的幽灵引用会被加入到队列中。通过检查该队列里面的内容就知道一个对象是不是已经准备要被回收了。
+幽灵引用及其队列的使用情况并不多见，主要用来实现比较精细的内存使用控制，这对于移动设备来说是很有意义的。程序可以在确定一个对象要被回收之后，再申请内存创建新的对象。通过这种方式可以使得程序所消耗的内存维持在一个相对较低的数量。 
+比如下面的代码给出了一个缓冲区的实现示例。
+?
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+public class PhantomBuffer {
+ private byte[] data = new byte[0];
+ private ReferenceQueue<byte[]> queue = new ReferenceQueue<byte[]>();
+ private PhantomReference<byte[]> ref = new PhantomReference<byte[]>(data, queue);
+ public byte[] get(int size) {
+  if (size <= 0) {
+   throw new IllegalArgumentException("Wrong buffer size");
+  }
+  if (data.length < size) {
+   data = null;
+   System.gc(); //强制运行垃圾回收器
+    try {
+    queue.remove(); //该方法会阻塞直到队列非空
+    ref.clear(); //幽灵引用不会自动清空，要手动运行
+    ref = null;
+    data = new byte[size];
+    ref = new PhantomReference<byte[]>(data, queue);
+   } catch (InterruptedException e) {
+    e.printStackTrace();
+   }
+  }
+  return data;
+ }
+}
+在上面的代码中，每次申请新的缓冲区的时候，都首先确保之前的缓冲区的字节数组已经被成功回收。引用队列的remove方法会阻塞直到新的幽灵引用被加入到队列中。不过需要注意的是，这种做法会导致垃圾回收器被运行的次数过多，可能会造成程序的吞吐量过低。
+示例代码：
+package com.skywang.java;
+ 
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.PhantomReference;
+ 
+public class PhantomReferenceTest {
+ 
+ public static void main(String[] args) {
+  ReferenceQueue queue = new ReferenceQueue();
+  PhantomReference ref = new PhantomReference(new MyDate(), queue);
+  System.gc();
+ }
+}
+运行结果：
+
+obj [Date: 1372142282558] is gc
+结果说明：假象引用，在实例化后，就被终止了。
+
+ReferenceQueue queue = new ReferenceQueue();
+PhantomReference ref = new PhantomReference(new MyDate(), queue);
+System.gc();
+等同于：
+MyDate date = new MyDate();
+date = null;
